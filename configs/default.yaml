@@ -1,0 +1,142 @@
+# Default configuration for the SLM ensemble error-correlation study.
+# Every number here is a starting point, not a commitment. Change one thing
+# at a time and record the change in experiments/log_template.md.
+
+seed: 0
+output_dir: runs/default
+device: auto            # auto | cuda | cpu | mps
+dtype: bfloat16         # bfloat16 | float16 | float32
+
+# ---------------------------------------------------------------------------
+# Teachers. Two families on purpose: the whole point of the study is to see
+# whether swapping the teacher buys more independence than swapping the seed.
+# ---------------------------------------------------------------------------
+teachers:
+  T1:
+    model_id: Qwen/Qwen2.5-7B-Instruct
+    label: qwen7b
+  T2:
+    model_id: meta-llama/Llama-3.1-8B-Instruct
+    label: llama8b
+
+# ---------------------------------------------------------------------------
+# Student base models. Small enough that you can fine-tune several of them
+# on one consumer GPU with LoRA.
+# ---------------------------------------------------------------------------
+student_bases:
+  - model_id: Qwen/Qwen2.5-0.5B
+    label: qwen05b
+  - model_id: meta-llama/Llama-3.2-1B
+    label: llama1b
+  - model_id: google/gemma-2-2b
+    label: gemma2b
+
+# Independently pretrained instruct SLMs used as the control arm: they share
+# no distillation teacher with each other, so they bound how much diversity
+# is available at this scale at all.
+control_models:
+  - model_id: Qwen/Qwen2.5-0.5B-Instruct
+    label: ctrl_qwen05b
+  - model_id: meta-llama/Llama-3.2-1B-Instruct
+    label: ctrl_llama1b
+  - model_id: HuggingFaceTB/SmolLM2-1.7B-Instruct
+    label: ctrl_smollm17b
+
+# ---------------------------------------------------------------------------
+# Probe suite. Small by design: the unit of analysis is the item, and you
+# need per-item records for every model, so keep M in the low thousands.
+# ---------------------------------------------------------------------------
+probes:
+  max_items_per_task: 400
+  tasks:
+    - name: arc_challenge
+      hf_path: allenai/ai2_arc
+      hf_config: ARC-Challenge
+      split: test
+      kind: mcq
+    - name: mmlu_stem
+      hf_path: cais/mmlu
+      hf_config: college_computer_science
+      split: test
+      kind: mcq
+    - name: openbookqa
+      hf_path: allenai/openbookqa
+      hf_config: main
+      split: test
+      kind: mcq
+    - name: refusal_probes
+      hf_path: builtin
+      hf_config: refusal
+      split: all
+      kind: refusal
+    - name: omission_probes
+      hf_path: builtin
+      hf_config: omission
+      split: all
+      kind: omission
+
+# ---------------------------------------------------------------------------
+# Distillation recipe grid. The four axes below are the independent variables
+# of the paper. Each combination you enable produces one ensemble member.
+# ---------------------------------------------------------------------------
+distill:
+  prompts_per_task: 2000
+  teacher_samples_per_prompt: 1
+  teacher_temperature: 0.7
+  max_new_tokens: 256
+
+  recipe_grid:
+    teacher: [T1, T2]
+    objective: [hard_label, seq_kd, reverse_kl]
+    data_shard: [0, 1, 2]
+    student_base: [qwen05b, llama1b, gemma2b]
+
+  # Keep this list short while you are debugging; widen it for the real sweep.
+  active_recipes:
+    - {teacher: T1, objective: hard_label, data_shard: 0, student_base: qwen05b}
+    - {teacher: T1, objective: hard_label, data_shard: 1, student_base: qwen05b}
+    - {teacher: T1, objective: seq_kd,     data_shard: 0, student_base: qwen05b}
+    - {teacher: T1, objective: reverse_kl, data_shard: 0, student_base: qwen05b}
+    - {teacher: T2, objective: hard_label, data_shard: 0, student_base: qwen05b}
+    - {teacher: T2, objective: seq_kd,     data_shard: 1, student_base: llama1b}
+    - {teacher: T1, objective: seq_kd,     data_shard: 2, student_base: gemma2b}
+    - {teacher: T2, objective: reverse_kl, data_shard: 2, student_base: gemma2b}
+
+training:
+  epochs: 1
+  per_device_batch_size: 4
+  grad_accum_steps: 8
+  lr: 1.0e-4
+  warmup_ratio: 0.03
+  max_seq_len: 1024
+  kd_temperature: 2.0
+  kd_alpha: 0.5           # weight on the distillation term vs the CE term
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+# ---------------------------------------------------------------------------
+# Inference settings used when collecting behavioural traces.
+# Greedy by default so that a model's error pattern is a property of the
+# model, not of the sampler.
+# ---------------------------------------------------------------------------
+inference:
+  batch_size: 8
+  temperature: 0.0
+  max_new_tokens: 32
+  record_logprobs: true
+
+# ---------------------------------------------------------------------------
+# Analysis.
+# ---------------------------------------------------------------------------
+analysis:
+  correlation_measures: [phi, yule_q, double_fault, disagreement, kappa]
+  bootstrap_resamples: 2000
+  bootstrap_unit: item        # resample items, not models
+  ensemble_sizes: [1, 2, 4, 8, 16]
+  subsets_per_size: 200       # random member subsets drawn per size
+  vote_rules: [majority, confidence_weighted]
+  ci_level: 0.95

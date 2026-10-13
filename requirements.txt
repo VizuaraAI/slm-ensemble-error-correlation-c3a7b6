@@ -1,0 +1,28 @@
+# Core runtime. Tested with Python 3.10 - 3.12.
+# Install torch first, matched to your CUDA version, from https://pytorch.org
+torch>=2.4.0
+transformers>=4.46.0
+tokenizers>=0.20.0
+accelerate>=1.0.0
+datasets>=3.0.0
+peft>=0.13.0
+trl>=0.12.0
+safetensors>=0.4.5
+
+# Analysis and reporting
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.14.0
+statsmodels>=0.14.2
+matplotlib>=3.9.0
+pyarrow>=17.0.0
+
+# Plumbing
+pyyaml>=6.0.2
+tqdm>=4.66.5
+rich>=13.9.0
+
+# Optional, only if you have a 24 GB or larger GPU and want fast batched
+# generation for the probe sweeps. Everything works without it.
+# vllm>=0.6.3
+# bitsandbytes>=0.44.0
